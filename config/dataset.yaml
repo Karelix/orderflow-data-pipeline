@@ -45,6 +45,9 @@ raw_data:
     time_column: Time
     date_format: "%Y/%m/%d"
     time_format: "%H:%M:%S"
+    time_formats:
+      - "%H:%M:%S.%f"
+      - "%H:%M:%S"
   columns:
     open: Open
     high: High
@@ -75,7 +78,45 @@ paths:
   gold_profile_levels_root: data_local/gold/profile_levels
   gold_profile_nodes_root: data_local/gold/profile_nodes
   manifest_path: data_local/metadata/manifest.parquet
+  repository_registry_path: data_local/metadata/repository_registry.parquet
   raw_files_path: data_local/metadata/raw_files.parquet
+
+storage:
+  provider: huggingface
+  active_repo_id: your-username/orderflow-es-001
+  env_file: .env
+  default_token_env_var: HF_TOKEN
+  repo_size_limit_bytes: 100000000000
+  metadata_remote_prefix: metadata
+  repositories:
+    - repo_id: your-username/orderflow-es-001
+      repo_sequence: 1
+      role: active
+      token_env_var: HF_TOKEN_ORDERFLOW_ES_001
+      notes: First ES order-flow dataset repository.
+    - repo_id: other-username/orderflow-es-002
+      repo_sequence: 2
+      role: standby
+      token_env_var: HF_TOKEN_ORDERFLOW_ES_002
+      notes: Overflow ES order-flow dataset repository.
+
+derived_datasets:
+  timeframes:
+    - 1m
+    - 5m
+    - 15m
+    - 30m
+    - 1h
+    - 4h
+  build:
+    ticks: true
+    bars: true
+    session_summaries: true
+    footprint_clusters: true
+    volume_profiles: true
+    profile_nodes: false
+    prior_session_features: false
+    level_touch_events: false
 
 parquet:
   engine: pyarrow
