@@ -1,0 +1,102 @@
+dataset:
+  name: orderflow_es
+  description: ES order-flow research dataset built from Sierra Chart exports.
+  symbol: ES
+  default_contract: ESU26-CME
+
+market:
+  exchange: CME
+  instrument_type: futures
+  tick_size: 0.25
+  currency: USD
+
+timezones:
+  source: UTC
+  target: America/New_York
+
+sessions:
+  timezone: America/New_York
+  session_date_convention: rth_date
+  interval_convention: half_open
+  globex_start: "18:00:00"
+  rth_start: "09:30:00"
+  rth_end: "16:15:00"
+  session_end: "17:00:00"
+  maintenance_start: "17:00:00"
+  maintenance_end: "18:00:00"
+  session_types:
+    globex:
+      start: "18:00:00"
+      end: "09:30:00"
+    rth:
+      start: "09:30:00"
+      end: "16:15:00"
+    post_rth:
+      start: "16:15:00"
+      end: "17:00:00"
+
+raw_data:
+  source_platform: Sierra Chart
+  export_format: csv
+  root: data_local/bronze/raw_sierra_csv
+  sample_file: data_local/bronze/raw_sierra_csv/ESU26-CME_first_test.txt
+  datetime:
+    date_column: Date
+    time_column: Time
+    date_format: "%Y/%m/%d"
+    time_format: "%H:%M:%S"
+  columns:
+    open: Open
+    high: High
+    low: Low
+    last: Last
+    volume: Volume
+    number_of_trades: NumberOfTrades
+    bid_volume: BidVolume
+    ask_volume: AskVolume
+
+derived_columns:
+  timestamp_utc: timestamp_utc
+  timestamp_ny: timestamp_ny
+  session_date: session_date
+  session_type: session_type
+  sequence_id: sequence_id
+  delta: delta
+  price_ticks: price_ticks
+
+paths:
+  bronze_root: data_local/bronze
+  silver_root: data_local/silver
+  gold_root: data_local/gold
+  metadata_root: data_local/metadata
+  silver_ticks_root: data_local/silver/ticks
+  silver_bars_root: data_local/silver/bars
+  silver_profiles_root: data_local/silver/profiles
+  gold_profile_levels_root: data_local/gold/profile_levels
+  gold_profile_nodes_root: data_local/gold/profile_nodes
+  manifest_path: data_local/metadata/manifest.parquet
+  raw_files_path: data_local/metadata/raw_files.parquet
+
+parquet:
+  engine: pyarrow
+  compression: snappy
+  partition_columns:
+    ticks:
+      - symbol
+      - year
+      - month
+    bars:
+      - symbol
+      - timeframe
+      - year
+      - month
+    profiles:
+      - symbol
+      - session_type
+      - year
+      - month
+
+processing:
+  chunk_size_rows: 500000
+  preserve_input_order: true
+  exclude_maintenance_break: true

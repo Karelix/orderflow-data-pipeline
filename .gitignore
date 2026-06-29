@@ -1,0 +1,48 @@
+# Local market data and generated datasets
+data_local/**
+!data_local/
+!data_local/**/
+!data_local/**/.gitkeep
+
+# Raw/exported data files that should never be committed
+*.csv
+*.tsv
+*.txt
+*.parquet
+*.feather
+*.arrow
+*.h5
+*.hdf5
+*.zip
+*.gz
+*.7z
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Environments
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# Notebook/editor noise
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
+.DS_Store
