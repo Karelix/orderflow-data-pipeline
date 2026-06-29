@@ -83,22 +83,22 @@ paths:
 
 storage:
   provider: huggingface
-  active_repo_id: your-username/orderflow-es-001
+  active_repo_id: karelix/orderflow-es-001
   env_file: .env
   default_token_env_var: HF_TOKEN
   repo_size_limit_bytes: 100000000000
   metadata_remote_prefix: metadata
   repositories:
-    - repo_id: your-username/orderflow-es-001
+    - repo_id: karelix/orderflow-es-001
       repo_sequence: 1
       role: active
       token_env_var: HF_TOKEN_ORDERFLOW_ES_001
       notes: First ES order-flow dataset repository.
-    - repo_id: other-username/orderflow-es-002
-      repo_sequence: 2
-      role: standby
-      token_env_var: HF_TOKEN_ORDERFLOW_ES_002
-      notes: Overflow ES order-flow dataset repository.
+    # - repo_id: future-username/orderflow-es-002
+    #   repo_sequence: 2
+    #   role: standby
+    #   token_env_var: HF_TOKEN_ORDERFLOW_ES_002
+    #   notes: Overflow ES order-flow dataset repository.
 
 derived_datasets:
   timeframes:

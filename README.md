@@ -18,8 +18,8 @@ The pipeline reads Sierra Chart CSV/TXT exports and produces:
 - A repo-aware manifest that tells you which Hugging Face repo contains each
   Parquet file.
 
-The current code supports local samples and validation. The full Hugging Face
-Parquet tree uploader is the next major piece.
+The current code supports local samples, full-style partitioned derived output,
+validation, manifest lookup, and uploading local Parquet trees to Hugging Face.
 
 ## Project Layout
 
@@ -95,7 +95,7 @@ Then fill in `.env`:
 ```text
 HF_TOKEN=
 HF_TOKEN_ORDERFLOW_ES_001=
-HF_TOKEN_ORDERFLOW_ES_002=
+# HF_TOKEN_ORDERFLOW_ES_002=
 ```
 
 The actual tokens stay in `.env`, which is ignored by git. The repo-to-token
@@ -104,10 +104,10 @@ mapping lives in `config/dataset.yaml`:
 ```yaml
 storage:
   repositories:
-    - repo_id: your-username/orderflow-es-001
+    - repo_id: karelix/orderflow-es-001
       token_env_var: HF_TOKEN_ORDERFLOW_ES_001
-    - repo_id: other-username/orderflow-es-002
-      token_env_var: HF_TOKEN_ORDERFLOW_ES_002
+    # - repo_id: future-username/orderflow-es-002
+    #   token_env_var: HF_TOKEN_ORDERFLOW_ES_002
 ```
 
 This allows a later overflow repo to use a different username and token.
@@ -176,6 +176,30 @@ Validate derived sample logic:
 & "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\validate_derived_sample.py --max-rows 10000
 ```
 
+## Build Partitioned Main-Style Outputs
+
+The sample writer is intentionally simple. For main uploads, use the partitioned
+writer so each Parquet file contains a single `session_date`.
+
+Example local check:
+
+```powershell
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\write_partitioned_derived.py --output-root data_local\tmp\partitioned_derived_sample --max-rows 200000 --chunk-size 10000 --timeframe 1h
+```
+
+Example output paths:
+
+```text
+bars/timeframe=1h/year=2026/month=05/session=2026-05-25/part.parquet
+footprint_clusters/timeframe=1h/year=2026/month=05/session=2026-05-25/part.parquet
+volume_profiles/year=2026/month=05/session=2026-05-25/part.parquet
+session_summaries/year=2026/month=05/session=2026-05-25/part.parquet
+```
+
+The writer streams cleaned rows in chunks and keeps aggregate state across chunk
+boundaries, so a 1-minute or 1-hour bar split across two chunks is still written
+as one correct bar.
+
 ## Manifest And Repo Lookup
 
 Build a manifest for the local derived sample:
@@ -206,13 +230,13 @@ After a Parquet tree has been uploaded, update the persistent local manifest and
 repository registry:
 
 ```powershell
-& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\update_manifest_after_upload.py --uploaded-root data_local\tmp\derived_sample --repo-id your-username/orderflow-es-001 --repo-sequence 1 --remote-prefix samples/derived_sample
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\update_manifest_after_upload.py --uploaded-root data_local\tmp\derived_sample --repo-id karelix/orderflow-es-001 --repo-sequence 1 --remote-prefix samples/derived_sample
 ```
 
 To also upload the tiny metadata files back to Hugging Face:
 
 ```powershell
-& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\update_manifest_after_upload.py --uploaded-root data_local\tmp\derived_sample --repo-id your-username/orderflow-es-001 --repo-sequence 1 --remote-prefix samples/derived_sample --upload-metadata
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\update_manifest_after_upload.py --uploaded-root data_local\tmp\derived_sample --repo-id karelix/orderflow-es-001 --repo-sequence 1 --remote-prefix samples/derived_sample --upload-metadata
 ```
 
 Remote metadata path:
@@ -222,20 +246,54 @@ metadata/manifest.parquet
 metadata/repository_registry.parquet
 ```
 
+## Upload A Parquet Tree To Hugging Face
+
+Dry-run the local derived sample without contacting Hugging Face:
+
+```powershell
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\upload_parquet_tree_to_hf.py --input-root data_local\tmp\derived_sample --remote-prefix samples/derived_sample --dry-run --skip-remote-size-check
+```
+
+Real upload with repo capacity checking:
+
+```powershell
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\upload_parquet_tree_to_hf.py --input-root data_local\tmp\derived_sample --remote-prefix samples/derived_sample
+```
+
+The uploader will:
+
+- Read the configured Hugging Face repos from `dataset.yaml`.
+- Resolve the selected repo token from `.env`.
+- Check the current repo size unless `--skip-remote-size-check` is used.
+- Choose the first active or standby repo with enough remaining capacity.
+- Upload all `.parquet` files under the input root.
+- Update the local manifest and repository registry.
+- Upload metadata files back to Hugging Face unless
+  `--skip-metadata-upload` is used.
+
+To force a specific repo:
+
+```powershell
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\upload_parquet_tree_to_hf.py --input-root data_local\tmp\derived_sample --remote-prefix samples/derived_sample --repo-id karelix/orderflow-es-001
+```
+
 ## Run Tests
 
 ```powershell
 & "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" -m pytest tests
 ```
 
-At the time this README was written, the suite has 31 tests.
+At the time this README was written, the suite has 36 tests.
 
 ## Current Limits
 
 - Full raw validation exists.
 - Local sample derived dataset writing exists.
+- Partitioned main-style derived dataset writing exists.
 - Manifest and metadata upload helpers exist.
-- Full direct-to-Hugging-Face derived dataset upload is not implemented yet.
-- Repo capacity selection is not implemented yet.
+- Local Parquet tree upload to Hugging Face exists.
+- Full validate-to-partitioned-derived-to-Hugging-Face orchestration is not
+  implemented yet.
+- Resumable upload behavior is not implemented yet.
 
 See `PROJECT_STATUS.md` for the living checklist.
