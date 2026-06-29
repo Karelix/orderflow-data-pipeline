@@ -1,4 +1,8 @@
+from dataclasses import asdict
 from datetime import date
+
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from src.config import load_config
 from src.ingest.write_parquet import write_derived_sample_parquets
@@ -48,6 +52,7 @@ def test_manifest_tracks_repo_and_finds_requested_slice(tmp_path) -> None:
     assert len(entries) == 4
     assert {entry.repo_id for entry in entries} == {"user/orderflow-es-002"}
     assert {entry.repo_sequence for entry in entries} == {2}
+    assert {entry.data_tier for entry in entries} == {"main"}
     assert registry[0].repo_id == "user/orderflow-es-002"
     assert registry[0].repo_sequence == 2
     assert registry[0].current_manifest_size_bytes > 0
@@ -56,6 +61,7 @@ def test_manifest_tracks_repo_and_finds_requested_slice(tmp_path) -> None:
 
     bar_matches = find_manifest_entries(
         entries,
+        data_tier="main",
         dataset_type="bars",
         symbol="ES",
         timeframe="1m",
@@ -63,6 +69,7 @@ def test_manifest_tracks_repo_and_finds_requested_slice(tmp_path) -> None:
     )
     profile_matches = find_manifest_entries(
         entries,
+        data_tier="main",
         dataset_type="volume_profiles",
         session_type="rth",
         session_date=date(2026, 5, 25),
@@ -71,8 +78,27 @@ def test_manifest_tracks_repo_and_finds_requested_slice(tmp_path) -> None:
     assert len(bar_matches) == 1
     assert bar_matches[0].repo_id == "user/orderflow-es-002"
     assert bar_matches[0].remote_path == "repo-002/bars/timeframe=1m/part.parquet"
+    assert find_manifest_entries(entries, data_tier="sample") == []
     assert len(profile_matches) == 1
     assert profile_matches[0].session_type_values == "full,globex,rth"
+
+    sample_entries = build_manifest_for_parquet_tree(
+        root=output_root,
+        config=config,
+        repo_id="user/orderflow-es-002",
+        repo_sequence=2,
+        remote_prefix="samples/derived_sample",
+    )
+    test_entries = build_manifest_for_parquet_tree(
+        root=output_root,
+        config=config,
+        repo_id="user/orderflow-es-002",
+        repo_sequence=2,
+        remote_prefix="main/ESU26-CME/test",
+    )
+
+    assert {entry.data_tier for entry in sample_entries} == {"sample"}
+    assert {entry.data_tier for entry in test_entries} == {"test"}
 
     manifest_path = tmp_path / "manifest.parquet"
     registry_path = tmp_path / "repository_registry.parquet"
@@ -83,3 +109,10 @@ def test_manifest_tracks_repo_and_finds_requested_slice(tmp_path) -> None:
     assert registry_path.stat().st_size > 0
     assert read_manifest_parquet(manifest_path)[0].repo_id == "user/orderflow-es-002"
     assert read_repository_registry_parquet(registry_path)[0].repo_sequence == 2
+
+    old_manifest_path = tmp_path / "old_manifest_without_data_tier.parquet"
+    old_row = asdict(sample_entries[0])
+    old_row.pop("data_tier")
+    pq.write_table(pa.Table.from_pylist([old_row]), old_manifest_path)
+
+    assert read_manifest_parquet(old_manifest_path)[0].data_tier == "sample"

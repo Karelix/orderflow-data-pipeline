@@ -152,6 +152,7 @@ def test_upload_parquet_tree_uploads_files_updates_manifest_and_metadata(
     assert result.manifest_update.manifest_path.exists()
     assert result.manifest_update.repository_registry_path.exists()
     assert len(result.manifest_update.manifest_entries) == 1
+    assert result.manifest_update.manifest_entries[0].data_tier == "sample"
     assert [item["path_in_repo"] for item in api.uploaded] == [
         "samples/test/bars/timeframe=1m/part.parquet",
         "metadata/manifest.parquet",

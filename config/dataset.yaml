@@ -100,6 +100,9 @@ storage:
     #   token_env_var: HF_TOKEN_ORDERFLOW_ES_002
     #   notes: Overflow ES order-flow dataset repository.
 
+manifest:
+  default_query_data_tier: main
+
 derived_datasets:
   timeframes:
     - 1m
@@ -141,3 +144,6 @@ processing:
   chunk_size_rows: 500000
   preserve_input_order: true
   exclude_maintenance_break: true
+
+validation:
+  max_allowed_out_of_order_timestamps: 2

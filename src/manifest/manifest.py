@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -16,6 +16,7 @@ MANIFEST_SCHEMA = pa.schema(
         ("repo_id", pa.string()),
         ("repo_sequence", pa.int32()),
         ("remote_path", pa.string()),
+        ("data_tier", pa.string()),
         ("local_path", pa.string()),
         ("dataset_type", pa.string()),
         ("symbol", pa.string()),
@@ -39,6 +40,15 @@ MANIFEST_SCHEMA = pa.schema(
         ("created_at_utc", pa.timestamp("us", tz="UTC")),
     ]
 )
+
+DEFAULT_MANIFEST_DATA_TIER = "main"
+DATA_TIER_ALIASES = {
+    "prod": "main",
+    "production": "main",
+    "samples": "sample",
+    "tests": "test",
+    "testing": "test",
+}
 
 REPOSITORY_REGISTRY_SCHEMA = pa.schema(
     [
@@ -64,6 +74,7 @@ class ManifestEntry:
     repo_id: str
     repo_sequence: int
     remote_path: str
+    data_tier: str
     local_path: str
     dataset_type: str
     symbol: str
@@ -111,6 +122,7 @@ def build_manifest_for_parquet_tree(
     repo_sequence: int | None = None,
     remote_prefix: str = "",
     validation_status: str = "validated",
+    data_tier: str | None = None,
 ) -> list[ManifestEntry]:
     """Build manifest entries for every Parquet file under a root directory."""
     root_path = Path(root)
@@ -129,6 +141,7 @@ def build_manifest_for_parquet_tree(
             repo_sequence=selected_repo_sequence,
             remote_prefix=remote_prefix,
             validation_status=validation_status,
+            data_tier=data_tier,
         )
         for path in sorted(root_path.rglob("*.parquet"))
     ]
@@ -142,12 +155,16 @@ def build_manifest_entry(
     repo_sequence: int,
     remote_prefix: str = "",
     validation_status: str = "validated",
+    data_tier: str | None = None,
 ) -> ManifestEntry:
     """Create a manifest entry from one local Parquet file."""
     file_path = Path(parquet_path)
     root_path = Path(root)
     relative_path = file_path.relative_to(root_path)
     remote_path = _join_remote_path(remote_prefix, relative_path)
+    selected_data_tier = normalize_manifest_data_tier(
+        data_tier or infer_manifest_data_tier(remote_path)
+    )
     table = pq.read_table(file_path)
     dataset_type = _dataset_type_from_path(relative_path)
 
@@ -166,6 +183,7 @@ def build_manifest_entry(
         repo_id=repo_id,
         repo_sequence=repo_sequence,
         remote_path=remote_path,
+        data_tier=selected_data_tier,
         local_path=str(file_path),
         dataset_type=dataset_type,
         symbol=symbol,
@@ -246,6 +264,7 @@ def build_repository_registry(
 
 def find_manifest_entries(
     entries: Iterable[ManifestEntry],
+    data_tier: str | None = None,
     dataset_type: str | None = None,
     symbol: str | None = None,
     contract: str | None = None,
@@ -255,8 +274,13 @@ def find_manifest_entries(
 ) -> list[ManifestEntry]:
     """Find manifest entries that can contain a requested dataset slice."""
     matches = []
+    selected_data_tier = (
+        normalize_manifest_data_tier(data_tier) if data_tier is not None else None
+    )
 
     for entry in entries:
+        if selected_data_tier is not None and entry.data_tier != selected_data_tier:
+            continue
         if dataset_type is not None and entry.dataset_type != dataset_type:
             continue
         if symbol is not None and entry.symbol != symbol:
@@ -293,6 +317,7 @@ def merge_manifest_entries(
         key=lambda entry: (
             entry.repo_sequence,
             entry.repo_id,
+            entry.data_tier,
             entry.dataset_type,
             entry.timeframe or "",
             entry.session_type or "",
@@ -309,8 +334,8 @@ def write_manifest_parquet(entries: Iterable[ManifestEntry], output_path: str | 
 
 def read_manifest_parquet(path: str | Path) -> list[ManifestEntry]:
     """Read manifest entries from Parquet."""
-    table = pq.read_table(path, schema=MANIFEST_SCHEMA)
-    return [ManifestEntry(**row) for row in table.to_pylist()]
+    table = pq.read_table(path)
+    return [_manifest_entry_from_row(row) for row in table.to_pylist()]
 
 
 def write_repository_registry_parquet(
@@ -341,6 +366,52 @@ def _write_dataclass_parquet(
 
 def _manifest_identity(entry: ManifestEntry) -> tuple[str, str]:
     return (entry.repo_id, entry.remote_path)
+
+
+def infer_manifest_data_tier(remote_path: str) -> str:
+    """Infer a manifest data tier from a remote path."""
+    parts = [
+        part.lower()
+        for part in remote_path.replace("\\", "/").split("/")
+        if part
+    ]
+
+    if any(part in {"sample", "samples"} for part in parts):
+        return "sample"
+
+    if any(part in {"test", "tests", "testing"} for part in parts):
+        return "test"
+
+    if parts and parts[0] == "main":
+        return "main"
+
+    return DEFAULT_MANIFEST_DATA_TIER
+
+
+def normalize_manifest_data_tier(value: str) -> str:
+    """Normalize data-tier names used by CLIs and manifest rows."""
+    normalized = value.strip().lower()
+
+    if not normalized:
+        return DEFAULT_MANIFEST_DATA_TIER
+
+    return DATA_TIER_ALIASES.get(normalized, normalized)
+
+
+def _manifest_entry_from_row(row: Mapping[str, Any]) -> ManifestEntry:
+    field_names = {field.name for field in fields(ManifestEntry)}
+    normalized = {name: row.get(name) for name in field_names}
+
+    if normalized["data_tier"] is None:
+        normalized["data_tier"] = infer_manifest_data_tier(
+            str(normalized.get("remote_path") or "")
+        )
+    else:
+        normalized["data_tier"] = normalize_manifest_data_tier(
+            str(normalized["data_tier"])
+        )
+
+    return ManifestEntry(**normalized)
 
 
 def _dataset_type_from_path(path: Path) -> str:

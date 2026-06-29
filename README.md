@@ -16,7 +16,7 @@ The pipeline reads Sierra Chart CSV/TXT exports and produces:
 - Footprint cluster rows by timeframe and price level.
 - Volume profiles for `globex`, `rth`, `post_rth`, and `full` sessions.
 - A repo-aware manifest that tells you which Hugging Face repo contains each
-  Parquet file.
+  Parquet file, with `main`, `test`, and `sample` tiers.
 
 The current code supports local samples, full-style partitioned derived output,
 validation, manifest lookup, and uploading local Parquet trees to Hugging Face.
@@ -111,6 +111,13 @@ storage:
 ```
 
 This allows a later overflow repo to use a different username and token.
+
+Manifest queries default to the `main` data tier:
+
+```yaml
+manifest:
+  default_query_data_tier: main
+```
 
 ## Inspect Raw Data
 
@@ -211,7 +218,7 @@ Build a manifest for the local derived sample:
 Query the manifest for a dataset slice:
 
 ```powershell
-& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\query_manifest.py --manifest data_local\tmp\derived_sample_manifest.parquet --dataset-type bars --timeframe 1m --session-date 2026-05-25
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\query_manifest.py --manifest data_local\tmp\derived_sample_manifest.parquet --data-tier sample --dataset-type bars --timeframe 1m --session-date 2026-05-25
 ```
 
 The output includes:
@@ -219,10 +226,14 @@ The output includes:
 ```text
 repo=...
 seq=...
+tier=...
 remote=...
 ```
 
 That is how you know which Hugging Face repo contains the data you want.
+Normal queries default to `--data-tier main`, so old samples and test uploads
+do not appear unless you ask for `--data-tier sample`, `--data-tier test`, or
+`--data-tier all`.
 
 ## Update Metadata After Upload
 
@@ -246,6 +257,15 @@ metadata/manifest.parquet
 metadata/repository_registry.parquet
 ```
 
+To upload the current local metadata files without uploading any Parquet data:
+
+```powershell
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\upload_metadata_to_hf.py
+```
+
+This is useful after a manifest schema migration, for example after adding
+`data_tier`.
+
 ## Upload A Parquet Tree To Hugging Face
 
 Dry-run the local derived sample without contacting Hugging Face:
@@ -268,6 +288,8 @@ The uploader will:
 - Choose the first active or standby repo with enough remaining capacity.
 - Upload all `.parquet` files under the input root.
 - Update the local manifest and repository registry.
+- Record a manifest `data_tier`, inferred from the remote prefix unless
+  `--data-tier` is supplied.
 - Upload metadata files back to Hugging Face unless
   `--skip-metadata-upload` is used.
 
@@ -277,13 +299,38 @@ To force a specific repo:
 & "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\upload_parquet_tree_to_hf.py --input-root data_local\tmp\derived_sample --remote-prefix samples/derived_sample --repo-id karelix/orderflow-es-001
 ```
 
+## Process Raw File To Hugging Face
+
+The end-to-end orchestration script validates raw data, writes partitioned
+main-style outputs, then uploads the resulting Parquet tree.
+
+Safe dry-run on a subset:
+
+```powershell
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\process_raw_file_to_hf.py --output-root data_local\tmp\process_raw_to_hf_sample --remote-prefix main/ESU26-CME/test --max-rows 200000 --validation-chunk-size 100000 --build-chunk-size 10000 --timeframe 1h --dry-run-upload --skip-remote-size-check
+```
+
+Real upload after the dry run looks good:
+
+```powershell
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\process_raw_file_to_hf.py --output-root data_local\tmp\process_raw_to_hf_sample --remote-prefix main/ESU26-CME/test --max-rows 200000 --validation-chunk-size 100000 --build-chunk-size 10000 --timeframe 1h
+```
+
+Because the prefix contains `/test`, this is recorded in the manifest as
+`data_tier=test`. A later production-style upload under a prefix like
+`main/ESU26-CME/...` is recorded as `data_tier=main`.
+
+For the known first ES raw file, the config allows up to 2 tiny out-of-order
+timestamp reversals because the builders sort rows before aggregation. Parse
+errors, volume mismatches, and tick-size mismatches still stop the upload.
+
 ## Run Tests
 
 ```powershell
 & "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" -m pytest tests
 ```
 
-At the time this README was written, the suite has 36 tests.
+At the time this README was written, the suite has 39 tests.
 
 ## Current Limits
 
@@ -292,8 +339,7 @@ At the time this README was written, the suite has 36 tests.
 - Partitioned main-style derived dataset writing exists.
 - Manifest and metadata upload helpers exist.
 - Local Parquet tree upload to Hugging Face exists.
-- Full validate-to-partitioned-derived-to-Hugging-Face orchestration is not
-  implemented yet.
+- Full validate-to-partitioned-derived-to-Hugging-Face orchestration exists.
 - Resumable upload behavior is not implemented yet.
 
 See `PROJECT_STATUS.md` for the living checklist.

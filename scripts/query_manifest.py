@@ -26,6 +26,11 @@ def main() -> int:
     parser.add_argument("--timeframe", default=None)
     parser.add_argument("--session-type", default=None)
     parser.add_argument("--session-date", default=None)
+    parser.add_argument(
+        "--data-tier",
+        default=None,
+        help="Manifest tier to query. Defaults to config value/main. Use 'all' for every tier.",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -36,9 +41,11 @@ def main() -> int:
         return 1
 
     session_date = _parse_date(args.session_date) if args.session_date else None
+    data_tier = _select_data_tier(args.data_tier, config)
     entries = read_manifest_parquet(manifest_path)
     matches = find_manifest_entries(
         entries=entries,
+        data_tier=data_tier,
         dataset_type=args.dataset_type,
         symbol=args.symbol,
         contract=args.contract,
@@ -60,6 +67,7 @@ def main() -> int:
                 [
                     f"repo={entry.repo_id}",
                     f"seq={entry.repo_sequence}",
+                    f"tier={entry.data_tier}",
                     f"type={entry.dataset_type}",
                     f"timeframe={entry.timeframe or ''}",
                     f"sessions={session_types}",
@@ -76,6 +84,15 @@ def main() -> int:
 
 def _parse_date(value: str) -> date:
     return date.fromisoformat(value)
+
+
+def _select_data_tier(value: str | None, config: dict) -> str | None:
+    selected = value or config.get("manifest", {}).get("default_query_data_tier", "main")
+
+    if selected.lower() == "all":
+        return None
+
+    return selected
 
 
 def _format_range(start: date | None, end: date | None) -> str:

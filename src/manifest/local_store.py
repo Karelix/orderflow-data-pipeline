@@ -36,6 +36,7 @@ def update_local_manifest_after_upload(
     repo_sequence: int | None = None,
     remote_prefix: str = "",
     validation_status: str = "validated",
+    data_tier: str | None = None,
     manifest_path: str | Path | None = None,
     repository_registry_path: str | Path | None = None,
 ) -> ManifestUpdateResult:
@@ -52,6 +53,7 @@ def update_local_manifest_after_upload(
         repo_sequence=repo_sequence,
         remote_prefix=remote_prefix,
         validation_status=validation_status,
+        data_tier=data_tier,
     )
     manifest_entries = merge_manifest_entries(existing_entries, new_entries)
     repository_entries = build_repository_registry(manifest_entries, config)

@@ -30,6 +30,11 @@ def main() -> int:
     parser.add_argument("--manifest-path", default=None)
     parser.add_argument("--registry-path", default=None)
     parser.add_argument("--validation-status", default="validated")
+    parser.add_argument(
+        "--data-tier",
+        default=None,
+        help="Manifest tier for this upload. Defaults to inference from remote prefix.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-remote-size-check", action="store_true")
     args = parser.parse_args()
@@ -49,6 +54,7 @@ def main() -> int:
         manifest_path=args.manifest_path,
         repository_registry_path=args.registry_path,
         validation_status=args.validation_status,
+        data_tier=args.data_tier,
         dry_run=args.dry_run,
         skip_remote_size_check=args.skip_remote_size_check,
     )

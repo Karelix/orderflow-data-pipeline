@@ -61,6 +61,7 @@ def test_update_local_manifest_after_upload_is_persistent_and_idempotent(tmp_pat
     assert len(result.new_entries) == 4
     assert len(repeated_result.manifest_entries) == 4
     assert len(manifest_entries) == 4
+    assert {entry.data_tier for entry in manifest_entries} == {"main"}
     assert repository_entries[0].repo_id == "user/orderflow-es-002"
     assert repository_entries[0].repo_sequence == 2
     assert repository_entries[0].first_session_date == date(2026, 5, 25)

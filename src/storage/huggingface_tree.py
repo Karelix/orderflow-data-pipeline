@@ -276,6 +276,7 @@ def upload_parquet_tree_to_hf(
     manifest_path: str | Path | None = None,
     repository_registry_path: str | Path | None = None,
     validation_status: str = "validated",
+    data_tier: str | None = None,
     dry_run: bool = False,
     skip_remote_size_check: bool = False,
     api: object | None = None,
@@ -345,6 +346,7 @@ def upload_parquet_tree_to_hf(
         repo_sequence=plan.repo_sequence,
         remote_prefix=remote_prefix,
         validation_status=validation_status,
+        data_tier=data_tier,
         manifest_path=manifest_path,
         repository_registry_path=repository_registry_path,
     )

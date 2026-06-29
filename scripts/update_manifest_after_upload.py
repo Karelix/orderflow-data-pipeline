@@ -24,6 +24,11 @@ def main() -> int:
     parser.add_argument("--repo-sequence", type=int, default=None)
     parser.add_argument("--remote-prefix", default="")
     parser.add_argument("--validation-status", default="validated")
+    parser.add_argument(
+        "--data-tier",
+        default=None,
+        help="Manifest tier for this upload. Defaults to inference from remote prefix.",
+    )
     parser.add_argument("--manifest-path", default=None)
     parser.add_argument("--registry-path", default=None)
     parser.add_argument("--upload-metadata", action="store_true")
@@ -43,6 +48,7 @@ def main() -> int:
         repo_sequence=args.repo_sequence,
         remote_prefix=args.remote_prefix,
         validation_status=args.validation_status,
+        data_tier=args.data_tier,
         manifest_path=args.manifest_path,
         repository_registry_path=args.registry_path,
     )

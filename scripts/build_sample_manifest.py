@@ -32,6 +32,11 @@ def main() -> None:
     parser.add_argument("--repo-id", default=None)
     parser.add_argument("--repo-sequence", type=int, default=None)
     parser.add_argument("--remote-prefix", default="samples/derived_sample")
+    parser.add_argument(
+        "--data-tier",
+        default=None,
+        help="Manifest tier. Defaults to inference from remote prefix.",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -41,6 +46,7 @@ def main() -> None:
         repo_id=args.repo_id,
         repo_sequence=args.repo_sequence,
         remote_prefix=args.remote_prefix,
+        data_tier=args.data_tier,
     )
     repositories = build_repository_registry(entries, config)
 
