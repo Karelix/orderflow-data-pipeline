@@ -100,6 +100,16 @@ def test_manifest_tracks_repo_and_finds_requested_slice(tmp_path) -> None:
     assert {entry.data_tier for entry in sample_entries} == {"sample"}
     assert {entry.data_tier for entry in test_entries} == {"test"}
 
+    named_test_entries = build_manifest_for_parquet_tree(
+        root=output_root,
+        config=config,
+        repo_id="user/orderflow-es-002",
+        repo_sequence=2,
+        remote_prefix="main/ESU26-CME/test-1m",
+    )
+
+    assert {entry.data_tier for entry in named_test_entries} == {"test"}
+
     manifest_path = tmp_path / "manifest.parquet"
     registry_path = tmp_path / "repository_registry.parquet"
     write_manifest_parquet(entries, manifest_path)

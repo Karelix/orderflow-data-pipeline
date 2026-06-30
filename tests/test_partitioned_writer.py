@@ -207,6 +207,89 @@ def test_partitioned_writer_writes_one_session_date_per_file(tmp_path) -> None:
     )
 
 
+def test_partitioned_writer_merges_session_boundary_time_buckets_across_chunks(tmp_path) -> None:
+    rows = [
+        make_tick(
+            datetime(2026, 5, 27, 9, 10, 0, tzinfo=NY),
+            "100.00",
+            10,
+            7,
+            3,
+            date(2026, 5, 27),
+            "globex",
+            0,
+        ),
+        make_tick(
+            datetime(2026, 5, 27, 9, 30, 0, tzinfo=NY),
+            "100.00",
+            5,
+            1,
+            4,
+            date(2026, 5, 27),
+            "rth",
+            1,
+        ),
+        make_tick(
+            datetime(2026, 5, 27, 16, 5, 0, tzinfo=NY),
+            "103.00",
+            4,
+            2,
+            2,
+            date(2026, 5, 27),
+            "rth",
+            2,
+        ),
+        make_tick(
+            datetime(2026, 5, 27, 16, 15, 0, tzinfo=NY),
+            "103.00",
+            6,
+            5,
+            1,
+            date(2026, 5, 27),
+            "post_rth",
+            3,
+        ),
+    ]
+    config = load_config()
+    output_root = tmp_path / "partitioned"
+
+    write_partitioned_derived_parquets_from_rows(
+        rows=rows,
+        output_root=output_root,
+        config=config,
+        chunk_size_rows=1,
+        timeframes=["1h"],
+        flush_lag_sessions=1,
+    )
+
+    bar_rows = _read_rows(output_root / "bars" / "timeframe=1h")
+    footprint_rows = _read_rows(output_root / "footprint_clusters" / "timeframe=1h")
+
+    assert len(bar_rows) == 2
+    assert [row["timestamp_ny"].isoformat() for row in bar_rows] == [
+        "2026-05-27T09:00:00-04:00",
+        "2026-05-27T16:00:00-04:00",
+    ]
+    assert [row["session_type"] for row in bar_rows] == ["rth", "rth"]
+    assert [row["volume"] for row in bar_rows] == [15, 10]
+    assert [row["buying_volume"] for row in bar_rows] == [7, 3]
+    assert [row["selling_volume"] for row in bar_rows] == [8, 7]
+    assert [row["delta"] for row in bar_rows] == [-1, -4]
+    assert [row["cumulative_delta"] for row in bar_rows] == [-1, -5]
+
+    assert len(footprint_rows) == 2
+    assert [row["timestamp_ny"].isoformat() for row in footprint_rows] == [
+        "2026-05-27T09:00:00-04:00",
+        "2026-05-27T16:00:00-04:00",
+    ]
+    assert [row["session_type"] for row in footprint_rows] == ["rth", "rth"]
+    assert [row["price_ticks"] for row in footprint_rows] == [400, 412]
+    assert [row["volume"] for row in footprint_rows] == [15, 10]
+    assert [row["buying_volume"] for row in footprint_rows] == [7, 3]
+    assert [row["selling_volume"] for row in footprint_rows] == [8, 7]
+    assert [row["delta"] for row in footprint_rows] == [-1, -4]
+
+
 def _read_rows(root) -> list[dict[str, object]]:
     rows = []
 

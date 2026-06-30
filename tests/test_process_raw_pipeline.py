@@ -10,12 +10,27 @@ from src.pipeline import RawValidationFailedError, process_raw_file_to_hf
 class FakeHfApi:
     def __init__(self) -> None:
         self.uploaded = []
+        self.commits = []
 
     def repo_info(self, **kwargs):
         return SimpleNamespace(siblings=[])
 
     def upload_file(self, **kwargs) -> None:
         self.uploaded.append(kwargs)
+
+    def create_commit(self, **kwargs) -> None:
+        self.commits.append(kwargs)
+
+        for operation in kwargs["operations"]:
+            self.uploaded.append(
+                {
+                    "path_in_repo": operation.path_in_repo,
+                    "path_or_fileobj": operation.path_or_fileobj,
+                    "repo_id": kwargs["repo_id"],
+                    "repo_type": kwargs["repo_type"],
+                    "token": kwargs["token"],
+                }
+            )
 
 
 def test_process_raw_file_to_hf_dry_run_writes_partitioned_outputs(tmp_path) -> None:
@@ -144,6 +159,73 @@ def test_process_raw_file_to_hf_uploads_with_fake_api_and_cleans_output(
     assert any(path.startswith("main/test/bars/timeframe=1m/") for path in uploaded_paths)
     assert "metadata/manifest.parquet" in uploaded_paths
     assert "metadata/repository_registry.parquet" in uploaded_paths
+
+
+def test_process_raw_file_to_hf_staged_uploads_and_deletes_batches(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    raw_file = tmp_path / "sample_sierra.txt"
+    raw_file.write_text(
+        "\n".join(
+            [
+                "Date, Time, Open, High, Low, Last, Volume, NumberOfTrades, BidVolume, AskVolume",
+                "2026/5/24, 22:00:00, 100.00, 100.00, 100.00, 100.00, 10, 1, 7, 3",
+                "2026/5/26, 00:00:00, 101.00, 101.00, 101.00, 101.00, 5, 1, 1, 4",
+                "2026/5/27, 00:00:00, 102.00, 102.00, 102.00, 102.00, 3, 1, 2, 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config = _test_config(tmp_path)
+    output_root = tmp_path / "partitioned"
+    api = FakeHfApi()
+    progress_events = []
+    monkeypatch.setenv("HF_TOKEN_ORDERFLOW_ES_001", "token")
+
+    result = process_raw_file_to_hf(
+        input_path=raw_file,
+        output_root=output_root,
+        remote_prefix="main/test",
+        config=config,
+        validation_chunk_size=10,
+        build_chunk_size=1,
+        timeframes=["1h"],
+        dry_run_upload=False,
+        skip_remote_size_check=True,
+        staged_upload=True,
+        api=api,
+        staged_progress_callback=progress_events.append,
+    )
+
+    parquet_uploads = [
+        item["path_in_repo"]
+        for item in api.uploaded
+        if item["path_in_repo"].endswith(".parquet")
+        and not item["path_in_repo"].startswith("metadata/")
+    ]
+
+    assert len(result.staged_upload_results) == 2
+    assert len(result.partition_results) == 12
+    assert result.output_cleaned is True
+    assert not list(output_root.rglob("*.parquet"))
+    assert len(parquet_uploads) == 12
+    assert all(path.startswith("main/test/") for path in parquet_uploads)
+    assert result.upload_result.manifest_update is not None
+    assert len(result.upload_result.manifest_update.manifest_entries) == 12
+    assert {entry.data_tier for entry in result.upload_result.manifest_update.manifest_entries} == {
+        "test"
+    }
+    assert [item["path_in_repo"] for item in api.uploaded].count(
+        "metadata/manifest.parquet"
+    ) == 2
+    assert [event.status for event in progress_events] == [
+        "ready",
+        "uploaded",
+        "ready",
+        "uploaded",
+    ]
+    assert [event.stage_index for event in progress_events] == [1, 1, 2, 2]
 
 
 def _test_config(tmp_path) -> dict:

@@ -3,6 +3,7 @@
 from src.pipeline.process_raw import (
     ProcessRawToHfResult,
     RawValidationFailedError,
+    StagedUploadProgress,
     process_raw_file_to_hf,
     raw_validation_failures_for_upload,
 )
@@ -10,6 +11,7 @@ from src.pipeline.process_raw import (
 __all__ = [
     "ProcessRawToHfResult",
     "RawValidationFailedError",
+    "StagedUploadProgress",
     "process_raw_file_to_hf",
     "raw_validation_failures_for_upload",
 ]

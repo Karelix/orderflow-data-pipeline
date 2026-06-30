@@ -12,7 +12,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import load_config
-from src.pipeline import RawValidationFailedError, process_raw_file_to_hf
+from src.pipeline import (
+    RawValidationFailedError,
+    StagedUploadProgress,
+    process_raw_file_to_hf,
+)
 from src.validation.raw_stream import RawStreamChunkSummary
 
 
@@ -45,6 +49,16 @@ def main() -> int:
     parser.add_argument("--skip-remote-size-check", action="store_true")
     parser.add_argument("--cleanup-output-after-upload", action="store_true")
     parser.add_argument(
+        "--staged-upload",
+        action="store_true",
+        help="Upload each written partition batch and delete it after upload.",
+    )
+    parser.add_argument(
+        "--keep-staged-output",
+        action="store_true",
+        help="Keep local files written during staged upload.",
+    )
+    parser.add_argument(
         "--data-tier",
         default=None,
         help="Manifest tier for this upload. Defaults to inference from remote prefix.",
@@ -71,6 +85,45 @@ def main() -> int:
             flush=True,
         )
 
+    def report_staged_progress(progress: StagedUploadProgress) -> None:
+        session_dates = _format_session_dates(progress)
+        datasets = _format_datasets(progress)
+        rows = sum(item.rows for item in progress.partition_results)
+        size_bytes = sum(item.file_size_bytes for item in progress.partition_results)
+
+        if progress.status == "ready":
+            print(
+                "stage={stage} ready sessions={sessions} files={files} rows={rows} size={size} datasets={datasets}".format(
+                    stage=progress.stage_index,
+                    sessions=session_dates,
+                    files=len(progress.partition_results),
+                    rows=rows,
+                    size=_format_bytes(size_bytes),
+                    datasets=datasets,
+                ),
+                flush=True,
+            )
+            return
+
+        if progress.status == "uploaded" and progress.upload_result is not None:
+            action = "planned" if progress.upload_result.dry_run else "uploaded"
+            files = (
+                len(progress.upload_result.plan.files)
+                if progress.upload_result.dry_run
+                else len(progress.upload_result.uploaded_files)
+            )
+            print(
+                "stage={stage} {action} sessions={sessions} files={files} repo={repo} cleaned={cleaned}".format(
+                    stage=progress.stage_index,
+                    action=action,
+                    sessions=session_dates,
+                    files=files,
+                    repo=progress.upload_result.plan.repo_id,
+                    cleaned=str(progress.local_files_deleted).lower(),
+                ),
+                flush=True,
+            )
+
     try:
         result = process_raw_file_to_hf(
             input_path=input_path,
@@ -95,7 +148,10 @@ def main() -> int:
             skip_remote_size_check=args.skip_remote_size_check,
             cleanup_output_after_upload=args.cleanup_output_after_upload,
             data_tier=args.data_tier,
+            staged_upload=args.staged_upload,
+            keep_staged_output=args.keep_staged_output,
             validation_progress_callback=report_validation_progress,
+            staged_progress_callback=report_staged_progress,
         )
     except RawValidationFailedError as exc:
         print(exc.report.format())
@@ -104,18 +160,36 @@ def main() -> int:
             print(f"- {failure}")
         return 1
 
+    upload_results = result.staged_upload_results or [result.upload_result]
     upload_plan = result.upload_result.plan
+    planned_file_count = sum(len(item.plan.files) for item in upload_results)
+    planned_bytes = sum(item.plan.total_size_bytes for item in upload_results)
+    uploaded_file_count = sum(len(item.uploaded_files) for item in upload_results)
+    uploaded_metadata_count = sum(
+        len(item.uploaded_metadata_files)
+        for item in upload_results
+    )
+    selected_repos = ",".join(
+        sorted({item.plan.repo_id for item in upload_results})
+    )
+
     print(result.raw_validation_report.format())
     print(f"Partition files written: {len(result.partition_results)}")
     print(f"Output root: {result.output_root}")
     print(f"Remote prefix: {result.remote_prefix}")
-    print(f"Upload mode: {'dry-run' if result.upload_result.dry_run else 'upload'}")
-    print(f"Selected repo: {upload_plan.repo_id}")
-    print(f"Parquet files planned: {len(upload_plan.files)}")
-    print(f"Upload bytes planned: {upload_plan.total_size_bytes}")
+    print(
+        "Upload mode: "
+        f"{'staged ' if result.staged_upload_results else ''}"
+        f"{'dry-run' if result.upload_result.dry_run else 'upload'}"
+    )
+    print(f"Upload stages: {len(upload_results)}")
+    print(f"Selected repo: {selected_repos}")
+    print(f"Last selected repo: {upload_plan.repo_id}")
+    print(f"Parquet files planned: {planned_file_count}")
+    print(f"Upload bytes planned: {planned_bytes}")
 
     if not result.upload_result.dry_run:
-        print(f"Uploaded Parquet files: {len(result.upload_result.uploaded_files)}")
+        print(f"Uploaded Parquet files: {uploaded_file_count}")
 
         if result.upload_result.manifest_update is not None:
             print(f"Manifest: {result.upload_result.manifest_update.manifest_path}")
@@ -124,10 +198,39 @@ def main() -> int:
                 f"{result.upload_result.manifest_update.repository_registry_path}"
             )
 
-        print(f"Uploaded metadata files: {len(result.upload_result.uploaded_metadata_files)}")
+        print(f"Uploaded metadata files: {uploaded_metadata_count}")
 
     print(f"Output cleaned: {result.output_cleaned}")
     return 0
+
+
+def _format_session_dates(progress: StagedUploadProgress) -> str:
+    values = sorted({item.session_date.isoformat() for item in progress.partition_results})
+
+    if not values:
+        return ""
+
+    if len(values) == 1:
+        return values[0]
+
+    return f"{values[0]}..{values[-1]}"
+
+
+def _format_datasets(progress: StagedUploadProgress) -> str:
+    return ",".join(sorted({item.dataset_type for item in progress.partition_results}))
+
+
+def _format_bytes(value: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    size = float(value)
+
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.1f}{unit}"
+
+        size /= 1024
+
+    return f"{value}B"
 
 
 if __name__ == "__main__":

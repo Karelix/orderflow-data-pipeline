@@ -7,7 +7,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Iterable
 
-from src.bars.time_bars import floor_timestamp, parse_timeframe_minutes
+from src.bars.time_bars import (
+    floor_timestamp,
+    merged_bar_session_type,
+    parse_timeframe_minutes,
+)
 from src.ingest.convert_ticks import CleanTickRow
 from src.ingest.order_rows import sort_clean_rows
 
@@ -88,6 +92,7 @@ class _FootprintAccumulator:
         return accumulator
 
     def update(self, row: CleanTickRow) -> None:
+        self.session_type = merged_bar_session_type(self.session_type, row.session_type)
         self.volume += row.volume
         self.buying_volume += row.ask_volume
         self.selling_volume += row.bid_volume
@@ -120,14 +125,14 @@ def build_footprint_clusters(
 ) -> list[FootprintClusterRow]:
     """Aggregate rows by time bar and price level."""
     timeframe_minutes = parse_timeframe_minutes(timeframe)
-    accumulators: dict[tuple[object, str, datetime, int], _FootprintAccumulator] = {}
+    accumulators: dict[tuple[object, datetime, int], _FootprintAccumulator] = {}
 
     for row in sort_clean_rows(rows):
         if row.session_date is None:
             continue
 
         bar_timestamp = floor_timestamp(row.timestamp_ny, timeframe_minutes)
-        key = (row.session_date, row.session_type, bar_timestamp, row.price_ticks)
+        key = (row.session_date, bar_timestamp, row.price_ticks)
 
         if key not in accumulators:
             accumulators[key] = _FootprintAccumulator.from_row(
@@ -143,6 +148,6 @@ def build_footprint_clusters(
         accumulators[key].to_row()
         for key in sorted(
             accumulators,
-            key=lambda item: (item[0], item[2], item[1], item[3]),
+            key=lambda item: (item[0], item[1], item[2]),
         )
     ]

@@ -147,6 +147,39 @@ def build_manifest_for_parquet_tree(
     ]
 
 
+def build_manifest_for_parquet_files(
+    root: str | Path,
+    parquet_files: Iterable[str | Path],
+    config: Mapping[str, Any],
+    repo_id: str | None = None,
+    repo_sequence: int | None = None,
+    remote_prefix: str = "",
+    validation_status: str = "validated",
+    data_tier: str | None = None,
+) -> list[ManifestEntry]:
+    """Build manifest entries for explicit Parquet files under a root."""
+    root_path = Path(root)
+    selected_repo_id = repo_id or config["storage"]["active_repo_id"]
+    selected_repo_sequence = repo_sequence or _repo_sequence_for_id(
+        config=config,
+        repo_id=selected_repo_id,
+    )
+
+    return [
+        build_manifest_entry(
+            parquet_path=path,
+            root=root_path,
+            config=config,
+            repo_id=selected_repo_id,
+            repo_sequence=selected_repo_sequence,
+            remote_prefix=remote_prefix,
+            validation_status=validation_status,
+            data_tier=data_tier,
+        )
+        for path in sorted(_resolve_parquet_files(root_path, parquet_files))
+    ]
+
+
 def build_manifest_entry(
     parquet_path: str | Path,
     root: str | Path,
@@ -160,7 +193,7 @@ def build_manifest_entry(
     """Create a manifest entry from one local Parquet file."""
     file_path = Path(parquet_path)
     root_path = Path(root)
-    relative_path = file_path.relative_to(root_path)
+    relative_path = file_path.resolve().relative_to(root_path.resolve())
     remote_path = _join_remote_path(remote_prefix, relative_path)
     selected_data_tier = normalize_manifest_data_tier(
         data_tier or infer_manifest_data_tier(remote_path)
@@ -368,6 +401,34 @@ def _manifest_identity(entry: ManifestEntry) -> tuple[str, str]:
     return (entry.repo_id, entry.remote_path)
 
 
+def _resolve_parquet_files(
+    root: Path,
+    parquet_files: Iterable[str | Path],
+) -> list[Path]:
+    root_path = root.resolve()
+    resolved_files = []
+
+    for parquet_file in parquet_files:
+        path = Path(parquet_file)
+
+        if not path.exists():
+            raise FileNotFoundError(f"Parquet file not found: {path}")
+
+        if not path.is_file():
+            raise ValueError(f"Expected a Parquet file, got: {path}")
+
+        if path.suffix != ".parquet":
+            raise ValueError(f"Expected a .parquet file, got: {path}")
+
+        path.resolve().relative_to(root_path)
+        resolved_files.append(path)
+
+    if not resolved_files:
+        raise ValueError("At least one Parquet file is required.")
+
+    return resolved_files
+
+
 def infer_manifest_data_tier(remote_path: str) -> str:
     """Infer a manifest data tier from a remote path."""
     parts = [
@@ -376,10 +437,10 @@ def infer_manifest_data_tier(remote_path: str) -> str:
         if part
     ]
 
-    if any(part in {"sample", "samples"} for part in parts):
+    if any(_is_tier_path_part(part, {"sample", "samples"}) for part in parts):
         return "sample"
 
-    if any(part in {"test", "tests", "testing"} for part in parts):
+    if any(_is_tier_path_part(part, {"test", "tests", "testing"}) for part in parts):
         return "test"
 
     if parts and parts[0] == "main":
@@ -396,6 +457,14 @@ def normalize_manifest_data_tier(value: str) -> str:
         return DEFAULT_MANIFEST_DATA_TIER
 
     return DATA_TIER_ALIASES.get(normalized, normalized)
+
+
+def _is_tier_path_part(part: str, tier_names: set[str]) -> bool:
+    return (
+        part in tier_names
+        or any(part.startswith(f"{name}-") for name in tier_names)
+        or any(part.startswith(f"{name}_") for name in tier_names)
+    )
 
 
 def _manifest_entry_from_row(row: Mapping[str, Any]) -> ManifestEntry:

@@ -235,6 +235,34 @@ Normal queries default to `--data-tier main`, so old samples and test uploads
 do not appear unless you ask for `--data-tier sample`, `--data-tier test`, or
 `--data-tier all`.
 
+## Plot 1h Session Bars
+
+Create an interactive Plotly HTML chart for one session date:
+
+```powershell
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\plot_1h_session.py --session-date 2026-05-25
+```
+
+The plot uses black filled down candles and white filled up candles with black
+outlines. Hovering a candle shows OHLC and volume details. Below the chart,
+each candle has aligned rows for total volume, buying volume, selling volume,
+and delta. The HTML plot supports scroll-wheel zoom, panning, and crosshair
+spike lines.
+
+By default the script uses `data_tier=main` from the local manifest and
+downloads the selected Parquet from Hugging Face if it is not present locally.
+To inspect a test upload:
+
+```powershell
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\plot_1h_session.py --session-date 2026-05-25 --data-tier test --remote-path-contains test-1m
+```
+
+Default output:
+
+```text
+data_local/plots/ESU26-CME_1h_YYYY-MM-DD.html
+```
+
 ## Update Metadata After Upload
 
 After a Parquet tree has been uploaded, update the persistent local manifest and
@@ -286,10 +314,11 @@ The uploader will:
 - Resolve the selected repo token from `.env`.
 - Check the current repo size unless `--skip-remote-size-check` is used.
 - Choose the first active or standby repo with enough remaining capacity.
-- Upload all `.parquet` files under the input root.
+- Upload Parquet files in batched commits instead of one commit per file.
 - Update the local manifest and repository registry.
 - Record a manifest `data_tier`, inferred from the remote prefix unless
   `--data-tier` is supplied.
+- Retry transient Hugging Face upload failures before giving up.
 - Upload metadata files back to Hugging Face unless
   `--skip-metadata-upload` is used.
 
@@ -320,6 +349,24 @@ Because the prefix contains `/test`, this is recorded in the manifest as
 `data_tier=test`. A later production-style upload under a prefix like
 `main/ESU26-CME/...` is recorded as `data_tier=main`.
 
+For larger runs, use staged upload so completed partition batches are uploaded,
+recorded in the manifest, published to remote metadata, and deleted locally as
+the raw file continues processing:
+
+```powershell
+& "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" scripts\process_raw_file_to_hf.py --output-root data_local\tmp\process_raw_to_hf --remote-prefix main/ESU26-CME --validation-chunk-size 100000 --build-chunk-size 500000 --staged-upload
+```
+
+Use `--keep-staged-output` only when you want to inspect the generated local
+Parquet files during a staged run.
+
+Each staged batch is uploaded as a single Parquet commit, and the two metadata
+files are uploaded together as one metadata commit. This avoids the Hugging Face
+per-file commit rate limit that can happen with `upload_file()`.
+
+During staged runs, the CLI prints lightweight progress lines when a partition
+batch is ready and when it has been uploaded or planned.
+
 For the known first ES raw file, the config allows up to 2 tiny out-of-order
 timestamp reversals because the builders sort rows before aggregation. Parse
 errors, volume mismatches, and tick-size mismatches still stop the upload.
@@ -330,7 +377,7 @@ errors, volume mismatches, and tick-size mismatches still stop the upload.
 & "C:\Users\Petridis\.conda\envs\portfolio-projects\python.exe" -m pytest tests
 ```
 
-At the time this README was written, the suite has 39 tests.
+At the time this README was written, the suite has 45 tests.
 
 ## Current Limits
 
@@ -340,6 +387,8 @@ At the time this README was written, the suite has 39 tests.
 - Manifest and metadata upload helpers exist.
 - Local Parquet tree upload to Hugging Face exists.
 - Full validate-to-partitioned-derived-to-Hugging-Face orchestration exists.
+- Staged upload/delete exists for reducing local disk use during full-file
+  processing.
 - Resumable upload behavior is not implemented yet.
 
 See `PROJECT_STATUS.md` for the living checklist.

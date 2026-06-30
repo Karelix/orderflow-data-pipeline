@@ -80,6 +80,47 @@ def test_build_time_bars_includes_volume_delta_and_cumulative_delta() -> None:
     assert bars[2].cumulative_delta == -2
 
 
+def test_build_time_bars_merges_session_boundary_bars_with_same_timestamp() -> None:
+    rows = [
+        make_tick(datetime(2026, 5, 25, 9, 10, 0, tzinfo=NY), "100.00", 10, 7, 3, "globex", 0),
+        make_tick(datetime(2026, 5, 25, 9, 30, 0, tzinfo=NY), "101.00", 5, 1, 4, "rth", 1),
+        make_tick(datetime(2026, 5, 25, 9, 59, 0, tzinfo=NY), "102.00", 2, 0, 2, "rth", 2),
+        make_tick(datetime(2026, 5, 25, 16, 5, 0, tzinfo=NY), "103.00", 4, 2, 2, "rth", 3),
+        make_tick(datetime(2026, 5, 25, 16, 15, 0, tzinfo=NY), "104.00", 6, 5, 1, "post_rth", 4),
+    ]
+
+    bars = build_time_bars(rows, "1h")
+
+    assert len(bars) == 2
+    assert [bar.timestamp_ny.isoformat() for bar in bars] == [
+        "2026-05-25T09:00:00-04:00",
+        "2026-05-25T16:00:00-04:00",
+    ]
+
+    assert bars[0].session_type == "rth"
+    assert bars[0].open == Decimal("100.00")
+    assert bars[0].high == Decimal("102.00")
+    assert bars[0].low == Decimal("100.00")
+    assert bars[0].close == Decimal("102.00")
+    assert bars[0].volume == 17
+    assert bars[0].buying_volume == 9
+    assert bars[0].selling_volume == 8
+    assert bars[0].delta == 1
+    assert bars[0].cumulative_delta == 1
+    assert bars[0].vwap == Decimal("100.529412")
+
+    assert bars[1].session_type == "rth"
+    assert bars[1].open == Decimal("103.00")
+    assert bars[1].high == Decimal("104.00")
+    assert bars[1].low == Decimal("103.00")
+    assert bars[1].close == Decimal("104.00")
+    assert bars[1].volume == 10
+    assert bars[1].buying_volume == 3
+    assert bars[1].selling_volume == 7
+    assert bars[1].delta == -4
+    assert bars[1].cumulative_delta == -3
+
+
 def test_build_session_summaries_aggregates_session_and_rth_globex_fields() -> None:
     summaries = build_session_summaries(sample_ticks())
 
@@ -121,6 +162,37 @@ def test_build_footprint_clusters_groups_by_timeframe_and_price() -> None:
     assert rth_930[1].price == Decimal("101.00")
     assert rth_930[1].volume == 5
     assert rth_930[1].delta == 3
+
+
+def test_build_footprint_clusters_merges_session_boundary_price_levels() -> None:
+    rows = [
+        make_tick(datetime(2026, 5, 25, 9, 10, 0, tzinfo=NY), "100.00", 10, 7, 3, "globex", 0),
+        make_tick(datetime(2026, 5, 25, 9, 30, 0, tzinfo=NY), "100.00", 5, 1, 4, "rth", 1),
+        make_tick(datetime(2026, 5, 25, 9, 59, 0, tzinfo=NY), "101.00", 2, 0, 2, "rth", 2),
+        make_tick(datetime(2026, 5, 25, 16, 5, 0, tzinfo=NY), "103.00", 4, 2, 2, "rth", 3),
+        make_tick(datetime(2026, 5, 25, 16, 15, 0, tzinfo=NY), "103.00", 6, 5, 1, "post_rth", 4),
+    ]
+
+    clusters = build_footprint_clusters(rows, timeframe="1h", tick_size=TICK_SIZE)
+
+    assert len(clusters) == 3
+    assert [
+        (row.timestamp_ny.isoformat(), row.price, row.session_type)
+        for row in clusters
+    ] == [
+        ("2026-05-25T09:00:00-04:00", Decimal("100.00"), "rth"),
+        ("2026-05-25T09:00:00-04:00", Decimal("101.00"), "rth"),
+        ("2026-05-25T16:00:00-04:00", Decimal("103.00"), "rth"),
+    ]
+
+    assert clusters[0].volume == 15
+    assert clusters[0].buying_volume == 7
+    assert clusters[0].selling_volume == 8
+    assert clusters[0].delta == -1
+    assert clusters[2].volume == 10
+    assert clusters[2].buying_volume == 3
+    assert clusters[2].selling_volume == 7
+    assert clusters[2].delta == -4
 
 
 def test_build_volume_profiles_creates_session_and_full_profiles() -> None:

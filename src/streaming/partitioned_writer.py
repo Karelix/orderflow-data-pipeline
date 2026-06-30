@@ -6,9 +6,14 @@ from dataclasses import dataclass
 from datetime import date, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any, Callable, Iterable, Iterator, Mapping
 
-from src.bars.time_bars import TimeBar, floor_timestamp, parse_timeframe_minutes
+from src.bars.time_bars import (
+    TimeBar,
+    floor_timestamp,
+    merged_bar_session_type,
+    parse_timeframe_minutes,
+)
 from src.ingest.convert_ticks import CleanTickRow, iter_clean_tick_rows
 from src.ingest.order_rows import sort_clean_rows
 from src.ingest.write_parquet import (
@@ -38,6 +43,9 @@ class PartitionedWriteResult:
     file_size_bytes: int
     session_date: date
     timeframe: str | None = None
+
+
+PartitionBatchCallback = Callable[[list[PartitionedWriteResult]], None]
 
 
 @dataclass
@@ -105,6 +113,8 @@ class _BarState(_OrderAwareState):
 
     def update(self, row: CleanTickRow) -> None:
         is_earlier, is_later = self.update_order(row)
+
+        self.session_type = merged_bar_session_type(self.session_type, row.session_type)
 
         if is_earlier:
             self.open = row.open
@@ -186,6 +196,7 @@ class _FootprintState:
         return state
 
     def update(self, row: CleanTickRow) -> None:
+        self.session_type = merged_bar_session_type(self.session_type, row.session_type)
         self.volume += row.volume
         self.buying_volume += row.ask_volume
         self.selling_volume += row.bid_volume
@@ -391,8 +402,8 @@ class _StreamingDerivedState:
             for timeframe in timeframes
         }
         self.tick_size = tick_size
-        self.bars: dict[tuple[date, str, str, object], _BarState] = {}
-        self.footprints: dict[tuple[date, str, str, object, int], _FootprintState] = {}
+        self.bars: dict[tuple[date, str, object], _BarState] = {}
+        self.footprints: dict[tuple[date, str, object, int], _FootprintState] = {}
         self.profiles: dict[tuple[date, str, int], _ProfileState] = {}
         self.sessions: dict[date, _SessionState] = {}
 
@@ -469,7 +480,7 @@ class _StreamingDerivedState:
                 self.profiles[key].update(row)
 
     def _add_bar(self, row: CleanTickRow, timeframe: str, timestamp_ny: object) -> None:
-        key = (row.session_date, timeframe, row.session_type, timestamp_ny)
+        key = (row.session_date, timeframe, timestamp_ny)
 
         if key not in self.bars:
             self.bars[key] = _BarState.from_row(
@@ -484,7 +495,6 @@ class _StreamingDerivedState:
         key = (
             row.session_date,
             timeframe,
-            row.session_type,
             timestamp_ny,
             row.price_ticks,
         )
@@ -553,7 +563,7 @@ class _StreamingDerivedState:
                 self.footprints[key].to_row()
                 for key in sorted(
                     self.footprints,
-                    key=lambda item: (item[3], item[2], item[4]),
+                    key=lambda item: (item[2], item[3]),
                 )
                 if key[0] == session_date and key[1] == timeframe
             ]
@@ -581,7 +591,7 @@ class _StreamingDerivedState:
     ) -> list[TimeBar]:
         states = [
             self.bars[key]
-            for key in sorted(self.bars, key=lambda item: (item[3], item[2]))
+            for key in sorted(self.bars, key=lambda item: item[2])
             if key[0] == session_date and key[1] == timeframe
         ]
         cumulative_delta = 0
@@ -620,6 +630,7 @@ def write_partitioned_derived_parquets(
     max_rows: int | None = None,
     timeframes: list[str] | None = None,
     flush_lag_sessions: int = 1,
+    partition_batch_callback: PartitionBatchCallback | None = None,
 ) -> list[PartitionedWriteResult]:
     """Stream a raw file and write partitioned derived Parquet datasets."""
     rows = iter_clean_tick_rows(input_path, config, max_rows=max_rows)
@@ -630,6 +641,7 @@ def write_partitioned_derived_parquets(
         chunk_size_rows=chunk_size_rows,
         timeframes=timeframes,
         flush_lag_sessions=flush_lag_sessions,
+        partition_batch_callback=partition_batch_callback,
     )
 
 
@@ -640,6 +652,7 @@ def write_partitioned_derived_parquets_from_rows(
     chunk_size_rows: int | None = None,
     timeframes: list[str] | None = None,
     flush_lag_sessions: int = 1,
+    partition_batch_callback: PartitionBatchCallback | None = None,
 ) -> list[PartitionedWriteResult]:
     """Write partitioned derived Parquet datasets from cleaned rows."""
     selected_timeframes = timeframes or list(config["derived_datasets"]["timeframes"])
@@ -656,6 +669,15 @@ def write_partitioned_derived_parquets_from_rows(
     )
     results: list[PartitionedWriteResult] = []
 
+    def collect_batch(batch: list[PartitionedWriteResult]) -> None:
+        if not batch:
+            return
+
+        results.extend(batch)
+
+        if partition_batch_callback is not None:
+            partition_batch_callback(batch)
+
     for chunk in _iter_chunks(rows, selected_chunk_size):
         sorted_chunk = sort_clean_rows(chunk)
         state.add_rows(sorted_chunk)
@@ -663,7 +685,7 @@ def write_partitioned_derived_parquets_from_rows(
         min_session_date = _min_session_date(sorted_chunk)
         if min_session_date is not None:
             flush_before = min_session_date - timedelta(days=flush_lag_sessions)
-            results.extend(
+            collect_batch(
                 state.flush_sessions_before(
                     output_root=output_dir,
                     compression=compression,
@@ -671,7 +693,7 @@ def write_partitioned_derived_parquets_from_rows(
                 )
             )
 
-    results.extend(state.flush_all(output_dir, compression))
+    collect_batch(state.flush_all(output_dir, compression))
     return results
 
 

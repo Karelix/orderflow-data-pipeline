@@ -3,6 +3,7 @@
 from src.manifest.manifest import (
     ManifestEntry,
     RepositoryEntry,
+    build_manifest_for_parquet_files,
     build_manifest_for_parquet_tree,
     build_repository_registry,
     find_manifest_entries,
@@ -12,12 +13,17 @@ from src.manifest.manifest import (
     write_manifest_parquet,
     write_repository_registry_parquet,
 )
-from src.manifest.local_store import ManifestUpdateResult, update_local_manifest_after_upload
+from src.manifest.local_store import (
+    ManifestUpdateResult,
+    update_local_manifest_after_file_upload,
+    update_local_manifest_after_upload,
+)
 
 __all__ = [
     "ManifestEntry",
     "ManifestUpdateResult",
     "RepositoryEntry",
+    "build_manifest_for_parquet_files",
     "build_manifest_for_parquet_tree",
     "build_repository_registry",
     "find_manifest_entries",
@@ -26,5 +32,6 @@ __all__ = [
     "read_repository_registry_parquet",
     "write_manifest_parquet",
     "write_repository_registry_parquet",
+    "update_local_manifest_after_file_upload",
     "update_local_manifest_after_upload",
 ]

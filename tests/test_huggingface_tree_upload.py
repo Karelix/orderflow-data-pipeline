@@ -4,6 +4,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.storage import (
+    upload_parquet_files_to_hf,
     build_parquet_tree_upload_plan,
     collect_parquet_tree_files,
     upload_parquet_tree_to_hf,
@@ -15,6 +16,7 @@ class FakeHfApi:
         self.repo_sizes = repo_sizes or {}
         self.created = []
         self.uploaded = []
+        self.commits = []
         self.repo_info_calls = []
 
     def repo_info(self, **kwargs):
@@ -28,6 +30,33 @@ class FakeHfApi:
 
     def upload_file(self, **kwargs) -> None:
         self.uploaded.append(kwargs)
+
+    def create_commit(self, **kwargs) -> None:
+        self.commits.append(kwargs)
+
+        for operation in kwargs["operations"]:
+            self.uploaded.append(
+                {
+                    "path_in_repo": operation.path_in_repo,
+                    "path_or_fileobj": operation.path_or_fileobj,
+                    "repo_id": kwargs["repo_id"],
+                    "repo_type": kwargs["repo_type"],
+                    "token": kwargs["token"],
+                }
+            )
+
+
+class FlakyUploadHfApi(FakeHfApi):
+    def __init__(self, repo_sizes: dict[str, int] | None = None) -> None:
+        super().__init__(repo_sizes=repo_sizes)
+        self.remaining_upload_failures = 1
+
+    def create_commit(self, **kwargs) -> None:
+        if self.remaining_upload_failures:
+            self.remaining_upload_failures -= 1
+            raise RuntimeError("temporary gateway timeout")
+
+        super().create_commit(**kwargs)
 
 
 def test_collect_parquet_tree_files_maps_remote_paths(tmp_path) -> None:
@@ -158,4 +187,195 @@ def test_upload_parquet_tree_uploads_files_updates_manifest_and_metadata(
         "metadata/manifest.parquet",
         "metadata/repository_registry.parquet",
     ]
+    assert len(api.commits) == 2
+    assert [len(commit["operations"]) for commit in api.commits] == [1, 2]
     assert len(result.uploaded_metadata_files) == 2
+
+
+def test_upload_parquet_files_uploads_selected_files_and_updates_manifest(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "derived"
+    selected_path = root / "bars" / "timeframe=1h" / "part.parquet"
+    skipped_path = root / "volume_profiles" / "part.parquet"
+    selected_path.parent.mkdir(parents=True)
+    skipped_path.parent.mkdir(parents=True)
+    table = pa.table(
+        {
+            "symbol": ["ES"],
+            "contract": ["ESU26-CME"],
+            "timestamp_utc": [None],
+            "timestamp_ny": [None],
+            "session_date": [None],
+        }
+    )
+    pq.write_table(table, selected_path)
+    pq.write_table(table, skipped_path)
+    manifest_path = tmp_path / "metadata" / "manifest.parquet"
+    registry_path = tmp_path / "metadata" / "repository_registry.parquet"
+    monkeypatch.setenv("HF_TOKEN_ORDERFLOW_ES_001", "token")
+    config = {
+        "dataset": {"symbol": "ES", "default_contract": "ESU26-CME"},
+        "storage": {
+            "provider": "huggingface",
+            "active_repo_id": "karelix/orderflow-es-001",
+            "repo_size_limit_bytes": 1000000,
+            "metadata_remote_prefix": "metadata",
+            "repositories": [
+                {
+                    "repo_id": "karelix/orderflow-es-001",
+                    "repo_sequence": 1,
+                    "role": "active",
+                    "token_env_var": "HF_TOKEN_ORDERFLOW_ES_001",
+                }
+            ],
+        },
+        "paths": {
+            "manifest_path": str(manifest_path),
+            "repository_registry_path": str(registry_path),
+        },
+    }
+    api = FakeHfApi(repo_sizes={"karelix/orderflow-es-001": 0})
+
+    result = upload_parquet_files_to_hf(
+        input_root=root,
+        parquet_files=[selected_path],
+        config=config,
+        remote_prefix="main/ESU26-CME/test",
+        api=api,
+    )
+
+    assert result.dry_run is False
+    assert [file.path_in_repo for file in result.uploaded_files] == [
+        "main/ESU26-CME/test/bars/timeframe=1h/part.parquet"
+    ]
+    assert result.manifest_update is not None
+    assert len(result.manifest_update.new_entries) == 1
+    assert result.manifest_update.new_entries[0].data_tier == "test"
+    assert result.manifest_update.new_entries[0].dataset_type == "bars"
+    assert [item["path_in_repo"] for item in api.uploaded] == [
+        "main/ESU26-CME/test/bars/timeframe=1h/part.parquet",
+        "metadata/manifest.parquet",
+        "metadata/repository_registry.parquet",
+    ]
+    assert len(api.commits) == 2
+    assert [len(commit["operations"]) for commit in api.commits] == [1, 2]
+
+
+def test_upload_parquet_files_retries_transient_upload_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "derived"
+    parquet_path = root / "bars" / "timeframe=1h" / "part.parquet"
+    parquet_path.parent.mkdir(parents=True)
+    table = pa.table(
+        {
+            "symbol": ["ES"],
+            "contract": ["ESU26-CME"],
+            "timestamp_utc": [None],
+            "timestamp_ny": [None],
+            "session_date": [None],
+        }
+    )
+    pq.write_table(table, parquet_path)
+    manifest_path = tmp_path / "metadata" / "manifest.parquet"
+    registry_path = tmp_path / "metadata" / "repository_registry.parquet"
+    monkeypatch.setenv("HF_TOKEN_ORDERFLOW_ES_001", "token")
+    monkeypatch.setattr("src.storage.huggingface_tree.time.sleep", lambda _: None)
+    config = {
+        "dataset": {"symbol": "ES", "default_contract": "ESU26-CME"},
+        "storage": {
+            "provider": "huggingface",
+            "active_repo_id": "karelix/orderflow-es-001",
+            "repo_size_limit_bytes": 1000000,
+            "metadata_remote_prefix": "metadata",
+            "repositories": [
+                {
+                    "repo_id": "karelix/orderflow-es-001",
+                    "repo_sequence": 1,
+                    "role": "active",
+                    "token_env_var": "HF_TOKEN_ORDERFLOW_ES_001",
+                }
+            ],
+        },
+        "paths": {
+            "manifest_path": str(manifest_path),
+            "repository_registry_path": str(registry_path),
+        },
+    }
+    api = FlakyUploadHfApi(repo_sizes={"karelix/orderflow-es-001": 0})
+
+    result = upload_parquet_files_to_hf(
+        input_root=root,
+        parquet_files=[parquet_path],
+        config=config,
+        remote_prefix="main/ESU26-CME",
+        api=api,
+    )
+
+    assert api.remaining_upload_failures == 0
+    assert result.uploaded_files[0].path_in_repo == (
+        "main/ESU26-CME/bars/timeframe=1h/part.parquet"
+    )
+    assert len(api.commits) == 2
+
+
+def test_upload_parquet_files_batches_multiple_files_into_one_parquet_commit(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "derived"
+    first_path = root / "bars" / "timeframe=1h" / "part.parquet"
+    second_path = root / "volume_profiles" / "part.parquet"
+    first_path.parent.mkdir(parents=True)
+    second_path.parent.mkdir(parents=True)
+    table = pa.table(
+        {
+            "symbol": ["ES"],
+            "contract": ["ESU26-CME"],
+            "timestamp_utc": [None],
+            "timestamp_ny": [None],
+            "session_date": [None],
+        }
+    )
+    pq.write_table(table, first_path)
+    pq.write_table(table, second_path)
+    manifest_path = tmp_path / "metadata" / "manifest.parquet"
+    registry_path = tmp_path / "metadata" / "repository_registry.parquet"
+    monkeypatch.setenv("HF_TOKEN_ORDERFLOW_ES_001", "token")
+    config = {
+        "dataset": {"symbol": "ES", "default_contract": "ESU26-CME"},
+        "storage": {
+            "provider": "huggingface",
+            "active_repo_id": "karelix/orderflow-es-001",
+            "repo_size_limit_bytes": 1000000,
+            "metadata_remote_prefix": "metadata",
+            "repositories": [
+                {
+                    "repo_id": "karelix/orderflow-es-001",
+                    "repo_sequence": 1,
+                    "role": "active",
+                    "token_env_var": "HF_TOKEN_ORDERFLOW_ES_001",
+                }
+            ],
+        },
+        "paths": {
+            "manifest_path": str(manifest_path),
+            "repository_registry_path": str(registry_path),
+        },
+    }
+    api = FakeHfApi(repo_sizes={"karelix/orderflow-es-001": 0})
+
+    result = upload_parquet_files_to_hf(
+        input_root=root,
+        parquet_files=[first_path, second_path],
+        config=config,
+        remote_prefix="main/ESU26-CME",
+        api=api,
+    )
+
+    assert len(result.uploaded_files) == 2
+    assert len(api.commits) == 2
+    assert [len(commit["operations"]) for commit in api.commits] == [2, 2]

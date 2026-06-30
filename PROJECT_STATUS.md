@@ -30,8 +30,11 @@ This file should be updated whenever the pipeline changes in a meaningful way.
   - cumulative delta.
   - number of trades.
   - VWAP.
+  - one aggregated bar per `session_date`, timeframe, and timestamp, even when
+    a candle spans `globex`, `rth`, or `post_rth` boundaries.
 - Session summaries.
-- Footprint cluster rows by timeframe and price level.
+- Footprint cluster rows by timeframe and price level, with session-boundary
+  rows merged for the same timestamp and price level.
 - Volume profiles for `globex`, `rth`, `post_rth`, and `full`.
 - Local sample Parquet writers for clean ticks and derived datasets.
 - Partitioned main-style Parquet writer that writes one file per
@@ -58,11 +61,16 @@ This file should be updated whenever the pipeline changes in a meaningful way.
 - Hugging Face repo size inspection from repo file metadata.
 - Automatic repo selection using configured active or standby repos and the
   100GB limit.
+- Retry handling for transient Hugging Face file and metadata upload failures.
+- Batched Hugging Face commits for staged Parquet batches and metadata files,
+  avoiding one commit per file.
 - Upload dry-run mode for local planning without changing remote or local
   metadata.
 - Post-upload local manifest update and optional remote metadata upload.
 - End-to-end raw-file orchestration script that validates raw data, writes
   partitioned derived outputs, and calls the Hugging Face uploader.
+- Staged raw-file upload mode that uploads each completed partition batch,
+  updates local and remote metadata, and deletes uploaded local Parquet files.
 - Upload gate that allows the configured tiny timestamp-reversal tolerance while
   still failing parse errors, volume mismatches, and tick-size mismatches.
 - Bounded real end-to-end upload test to `karelix/orderflow-es-001`, including
@@ -74,6 +82,9 @@ This file should be updated whenever the pipeline changes in a meaningful way.
   manifests, local metadata updates, HF metadata upload wiring, Parquet tree
   upload planning, partitioned writing, end-to-end orchestration, and token
   resolution.
+- Plotly HTML script for visualizing one session date's 1h candles with
+  aligned bottom rows for volume, buying volume, selling volume, and delta,
+  plus scroll-wheel zoom and crosshair spike lines.
 
 ## Current Operating Rules
 
@@ -97,8 +108,6 @@ derived builders sort rows by `(timestamp_ny, sequence_id)` before aggregation.
 
 - Test the uploader against the real `karelix/orderflow-es-001` Hugging Face
   repo using the small derived sample.
-- Add per-session or staged upload cleanup for completed full-file partitions so
-  large outputs do not remain permanently on local disk.
 - Add resumable upload behavior.
 - Add raw file registry metadata.
 - Add tests for resumable or retryable upload behavior once that exists.
@@ -106,5 +115,5 @@ derived builders sort rows by `(timestamp_ny, sequence_id)` before aggregation.
 ## Suggested Next Commit Title
 
 ```text
-Add Hugging Face upload workflow with manifest tiering
+Add staged Hugging Face upload cleanup workflow
 ```

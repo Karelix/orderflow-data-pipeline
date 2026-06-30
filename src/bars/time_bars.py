@@ -12,6 +12,11 @@ from src.ingest.order_rows import sort_clean_rows
 
 
 VWAP_QUANT = Decimal("0.000001")
+BAR_SESSION_TYPE_PRIORITY = {
+    "globex": 1,
+    "post_rth": 2,
+    "rth": 3,
+}
 
 
 @dataclass(frozen=True)
@@ -101,6 +106,7 @@ class _BarAccumulator:
         )
 
     def update(self, row: CleanTickRow) -> None:
+        self.session_type = merged_bar_session_type(self.session_type, row.session_type)
         self.high = max(self.high, row.high)
         self.low = min(self.low, row.low)
         self.close = row.last
@@ -141,14 +147,14 @@ class _BarAccumulator:
 def build_time_bars(rows: Iterable[CleanTickRow], timeframe: str) -> list[TimeBar]:
     """Aggregate cleaned tick rows into time bars."""
     timeframe_minutes = parse_timeframe_minutes(timeframe)
-    accumulators: dict[tuple[object, str, datetime], _BarAccumulator] = {}
+    accumulators: dict[tuple[object, datetime], _BarAccumulator] = {}
 
     for row in sort_clean_rows(rows):
         if row.session_date is None:
             continue
 
         bar_timestamp = floor_timestamp(row.timestamp_ny, timeframe_minutes)
-        key = (row.session_date, row.session_type, bar_timestamp)
+        key = (row.session_date, bar_timestamp)
 
         if key not in accumulators:
             accumulators[key] = _BarAccumulator.from_row(row, timeframe, bar_timestamp)
@@ -159,7 +165,7 @@ def build_time_bars(rows: Iterable[CleanTickRow], timeframe: str) -> list[TimeBa
         accumulators[key]
         for key in sorted(
             accumulators,
-            key=lambda item: (item[0], item[2], item[1]),
+            key=lambda item: (item[0], item[1]),
         )
     ]
 
@@ -173,6 +179,17 @@ def build_time_bars(rows: Iterable[CleanTickRow], timeframe: str) -> list[TimeBa
         bars.append(accumulator.to_bar(cumulative_delta=cumulative_delta))
 
     return bars
+
+
+def merged_bar_session_type(current: str, incoming: str) -> str:
+    """Prefer RTH when a time bar contains ticks from multiple session types."""
+    current_priority = BAR_SESSION_TYPE_PRIORITY.get(current, 0)
+    incoming_priority = BAR_SESSION_TYPE_PRIORITY.get(incoming, 0)
+
+    if incoming_priority > current_priority:
+        return incoming
+
+    return current
 
 
 def parse_timeframe_minutes(timeframe: str) -> int:
